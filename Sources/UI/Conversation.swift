@@ -193,6 +193,7 @@ public final class Conversation: @unchecked Sendable {
 		client.disconnect()
 		errorStream.finish()
 		eventStream.finish()
+		remoteAudioBufferStream.finish()
 	}
 
 	/// Make changes to the current session
