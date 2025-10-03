@@ -9,6 +9,42 @@ public enum ConversationError: Error {
 	case converterInitializationFailed
 }
 
+/// A Sendable wrapper for remote audio data
+public struct RemoteAudioBuffer: Sendable {
+	public let data: Data
+	public let frameLength: UInt32
+	public let channelCount: UInt32
+	public let sampleRate: Double
+	public let format: AVAudioFormat
+	
+	init(from buffer: AVAudioPCMBuffer) {
+		self.frameLength = buffer.frameLength
+		self.channelCount = buffer.format.channelCount
+		self.sampleRate = buffer.format.sampleRate
+		self.format = buffer.format
+		
+		// Copy audio data to a Data object for safe transfer
+		let audioBuffer = buffer.audioBufferList.pointee.mBuffers
+		let dataSize = Int(audioBuffer.mDataByteSize)
+		self.data = Data(bytes: audioBuffer.mData!, count: dataSize)
+	}
+	
+	/// Convert back to AVAudioPCMBuffer for processing
+	public func toPCMBuffer() -> AVAudioPCMBuffer? {
+		guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {
+			return nil
+		}
+		buffer.frameLength = frameLength
+		
+		let audioBuffer = buffer.audioBufferList.pointee.mBuffers
+		_ = data.withUnsafeBytes { bytes in
+			memcpy(audioBuffer.mData, bytes.baseAddress, Int(audioBuffer.mDataByteSize))
+		}
+		
+		return buffer
+	}
+}
+
 @MainActor @Observable
 public final class Conversation: @unchecked Sendable {
 	public typealias SessionUpdateCallback = (inout Session) -> Void
@@ -18,6 +54,7 @@ public final class Conversation: @unchecked Sendable {
 	private let sessionUpdateCallback: SessionUpdateCallback?
 	private let errorStream: AsyncStream<ServerError>.Continuation
 	private let eventStream: AsyncStream<ServerEvent>.Continuation
+	private let remoteAudioBufferStream: AsyncStream<RemoteAudioBuffer>.Continuation
 
 	/// Whether to print debug information to the console.
 	public var debug: Bool
@@ -38,6 +75,10 @@ public final class Conversation: @unchecked Sendable {
 	/// A stream of all server events that occur during the conversation.
 	/// This stream allows external observers to track all events without modifying conversation functionality.
 	public let allEvents: AsyncStream<ServerEvent>
+
+	/// A stream of remote audio buffers received from the server.
+	/// This stream allows external observers to process audio data for custom use cases like saving or analysis.
+	public let remoteAudioBuffers: AsyncStream<RemoteAudioBuffer>
 
 	/// The current session for this conversation.
 	public private(set) var session: Session?
@@ -71,6 +112,7 @@ public final class Conversation: @unchecked Sendable {
 		self.sessionUpdateCallback = sessionUpdateCallback
 		(errors, errorStream) = AsyncStream.makeStream(of: ServerError.self)
 		(allEvents, eventStream) = AsyncStream.makeStream(of: ServerEvent.self)
+		(remoteAudioBuffers, remoteAudioBufferStream) = AsyncStream.makeStream(of: RemoteAudioBuffer.self)
 
 		// Set up remote audio buffer capture
 		client.onRemoteAudioBuffer { [weak self] (pcmBuffer: AVAudioPCMBuffer) in
@@ -79,6 +121,12 @@ public final class Conversation: @unchecked Sendable {
 			let frameLength = pcmBuffer.frameLength
 			let channelCount = pcmBuffer.format.channelCount
 			let sampleRate = pcmBuffer.format.sampleRate
+			
+			// Create a sendable wrapper for the buffer
+			let sendableBuffer = RemoteAudioBuffer(from: pcmBuffer)
+			
+			// Yield the buffer to the stream for external processing
+			self.remoteAudioBufferStream.yield(sendableBuffer)
 			
 			Task { @MainActor in
 				if self.debug {
@@ -107,6 +155,7 @@ public final class Conversation: @unchecked Sendable {
 		client.disconnect()
 		errorStream.finish()
 		eventStream.finish()
+		remoteAudioBufferStream.finish()
 	}
 
 	public func connect(using request: URLRequest) async throws {
