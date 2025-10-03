@@ -1,15 +1,19 @@
-final class UnsafeInteriorMutable<T: Sendable>: @unchecked Sendable {
+import Foundation
+
+public final class UnsafeInteriorMutable<T: Sendable>: @unchecked Sendable {
 	private var value: T?
 
-	func set(_ value: T) {
+	public init() {}
+
+	public func set(_ value: T) {
 		self.value = value
 	}
 
-	func get() -> T? {
+	public func get() -> T? {
 		return value
 	}
 
-	func lazy(_ closure: () -> T?) -> T? {
+	public func lazy(_ closure: () -> T?) -> T? {
 		if case let .some(wrapped) = value {
 			return wrapped
 		}

@@ -28,8 +28,11 @@ import FoundationNetworking
 	package let audioTrack: LKRTCAudioTrack
 	private let dataChannel: LKRTCDataChannel
 	private let connection: LKRTCPeerConnection
+	private let remoteAudioRenderer = RemoteAudioRenderer()
 
 	private let stream: AsyncThrowingStream<ServerEvent, Error>.Continuation
+	
+	@ObservationIgnored private let remoteAudioTrack = UnsafeInteriorMutable<LKRTCAudioTrack>()
 
 	private static let factory: LKRTCPeerConnectionFactory = {
 		LKRTCInitializeSSL()
@@ -87,6 +90,21 @@ import FoundationNetworking
 
 	public func toggleMute() {
 		audioTrack.isEnabled.toggle()
+	}
+	
+	/// Set a callback to receive remote audio buffers as they arrive
+	public func onRemoteAudioBuffer(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) {
+		remoteAudioRenderer.onAudioBuffer = handler
+	}
+}
+
+// MARK: - Remote Audio Renderer
+
+private final class RemoteAudioRenderer: NSObject, LKRTCAudioRenderer, @unchecked Sendable {
+	var onAudioBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
+	
+	func render(pcmBuffer: AVAudioPCMBuffer) {
+		onAudioBuffer?(pcmBuffer)
 	}
 }
 
@@ -178,9 +196,24 @@ private extension WebRTCConnector {
 
 extension WebRTCConnector: LKRTCPeerConnectionDelegate {
 	public func peerConnectionShouldNegotiate(_: LKRTCPeerConnection) {}
-	public func peerConnection(_: LKRTCPeerConnection, didAdd _: LKRTCMediaStream) {}
+	
+	public func peerConnection(_: LKRTCPeerConnection, didAdd stream: LKRTCMediaStream) {
+		// Capture remote audio track when added
+		if let audioTrack = stream.audioTracks.first {
+			remoteAudioTrack.set(audioTrack)
+			audioTrack.add(remoteAudioRenderer)
+		}
+	}
+	
 	public func peerConnection(_: LKRTCPeerConnection, didOpen _: LKRTCDataChannel) {}
-	public func peerConnection(_: LKRTCPeerConnection, didRemove _: LKRTCMediaStream) {}
+	
+	public func peerConnection(_: LKRTCPeerConnection, didRemove stream: LKRTCMediaStream) {
+		// Clean up when remote audio track is removed
+		if let audioTrack = stream.audioTracks.first {
+			audioTrack.remove(remoteAudioRenderer)
+		}
+	}
+	
 	public func peerConnection(_: LKRTCPeerConnection, didChange _: LKRTCSignalingState) {}
 	public func peerConnection(_: LKRTCPeerConnection, didGenerate _: LKRTCIceCandidate) {}
 	public func peerConnection(_: LKRTCPeerConnection, didRemove _: [LKRTCIceCandidate]) {}

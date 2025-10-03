@@ -72,6 +72,21 @@ public final class Conversation: @unchecked Sendable {
 		(errors, errorStream) = AsyncStream.makeStream(of: ServerError.self)
 		(allEvents, eventStream) = AsyncStream.makeStream(of: ServerEvent.self)
 
+		// Set up remote audio buffer capture
+		client.onRemoteAudioBuffer { [weak self] (pcmBuffer: AVAudioPCMBuffer) in
+			guard let self else { return }
+			// Extract values before crossing isolation boundary
+			let frameLength = pcmBuffer.frameLength
+			let channelCount = pcmBuffer.format.channelCount
+			let sampleRate = pcmBuffer.format.sampleRate
+			
+			Task { @MainActor in
+				if self.debug {
+					print("📢 Remote audio buffer received: \(frameLength) frames, \(channelCount) channels, \(sampleRate) Hz")
+				}
+			}
+		}
+
 		task = Task.detached { [weak self] in
 			guard let self else { return }
 
